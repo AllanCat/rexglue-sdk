@@ -476,6 +476,20 @@ static VirtualKey GdkKeyvalToVirtualKey(guint keyval) {
     case 0xFFAD: return VirtualKey::kSubtract;
     case 0xFFAE: return VirtualKey::kDecimal;
     case 0xFFAF: return VirtualKey::kDivide;
+    // --- OEM / punctuation keys ---
+    // GDK keysyms for ASCII punctuation equal their Unicode codepoints, so
+    // both the unshifted and shifted variants of each physical key are listed.
+    case 0x002C: case 0x003C: return VirtualKey::kOemComma;   // ,  <
+    case 0x002E: case 0x003E: return VirtualKey::kOemPeriod;  // .  >
+    case 0x002F: case 0x003F: return VirtualKey::kOem2;       // /  ?
+    case 0x003B: case 0x003A: return VirtualKey::kOem1;       // ;  :
+    case 0x0027: case 0x0022: return VirtualKey::kOem7;       // '  "
+    case 0x005B: case 0x007B: return VirtualKey::kOem4;       // [  {
+    case 0x005D: case 0x007D: return VirtualKey::kOem6;       // ]  }
+    case 0x005C: case 0x007C: return VirtualKey::kOem5;       // \  |
+    case 0x002D: case 0x005F: return VirtualKey::kOemMinus;   // -  _
+    case 0x003D: case 0x002B: return VirtualKey::kOemPlus;    // =  +
+    case 0x0060: case 0x007E: return VirtualKey::kOem3;       // `  ~
     default:     return VirtualKey::kNone;
   }
 }
