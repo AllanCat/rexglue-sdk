@@ -21,6 +21,12 @@
 #include <rex/logging.h>
 
 REXCVAR_DEFINE_BOOL(audio_mute, false, "Audio", "Mute audio output");
+// Volume as an integer percentage (100 = 1.0, 250 = 2.5x, etc.).
+// Default 250 compensates for the 5.1->stereo downmix normalisation factor
+// (1/2.5) applied when the game outputs stereo-only front-left/front-right.
+REXCVAR_DEFINE_UINT32(audio_volume_pct, 250, "Audio",
+    "Master volume as integer percentage (100=normal, 250=default 2.5x to "
+    "compensate for 5.1->stereo downmix when game outputs stereo content).");
 
 namespace rex::audio::sdl {
 
@@ -167,6 +173,15 @@ void SDLAudioDriver::SDLCallback(void* userdata, Uint8* stream, int len) {
         default:
           assert_unhandled_case(driver->sdl_device_channels_);
           break;
+      }
+      // Apply master volume.
+      const float volume = REXCVAR_GET(audio_volume_pct) * 0.01f;
+      if (volume != 1.0f) {
+        auto* fout = reinterpret_cast<float*>(stream);
+        const int sample_count = len / static_cast<int>(sizeof(float));
+        for (int i = 0; i < sample_count; i++) {
+          fout[i] *= volume;
+        }
       }
     }
     driver->frames_unused_.push(buffer);
