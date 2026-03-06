@@ -188,7 +188,7 @@ ppc_u32_result_t XMAInitializeContext_entry(ppc_pvoid_t context_ptr,
 }
 
 ppc_u32_result_t XMASetLoopData_entry(ppc_pvoid_t context_ptr,
-                                      ppc_ptr_t<XMA_CONTEXT_DATA> loop_data) {
+                                      ppc_ptr_t<XMA_LOOP_DATA> loop_data) {
   XMA_CONTEXT_DATA context(context_ptr);
 
   context.loop_start = loop_data->loop_start;
