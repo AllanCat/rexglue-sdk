@@ -76,7 +76,8 @@ struct XMA_CONTEXT_DATA {
 
   // DWORD 2
   uint32_t input_buffer_read_offset : 26;  // XMAGetInputBufferReadOffset
-  uint32_t unk_dword_2 : 6;                // ErrorStatus/ErrorSet (?)
+  uint32_t error_status : 4;               // +26bit, ErrorStatus
+  uint32_t error_set : 2;                  // +30bit, ErrorSet
 
   // DWORD 3
   uint32_t loop_start : 26;  // XMASetLoopData LoopStartOffset
@@ -108,6 +109,27 @@ struct XMA_CONTEXT_DATA {
   // DWORD 10-15
   uint32_t unk_dwords_10_15[6];  // reserved?
 
+  bool IsAnyInputBufferValid() const {
+    return input_buffer_0_valid || input_buffer_1_valid;
+  }
+  bool IsCurrentInputBufferValid() const {
+    return IsInputBufferValid(current_buffer);
+  }
+  bool IsInputBufferValid(uint8_t index) const {
+    return index == 0 ? static_cast<bool>(input_buffer_0_valid)
+                      : static_cast<bool>(input_buffer_1_valid);
+  }
+  uint32_t GetCurrentInputBufferAddress() const {
+    return current_buffer == 0 ? input_buffer_0_ptr : input_buffer_1_ptr;
+  }
+  uint32_t GetInputBufferAddress(uint8_t index) const {
+    return index == 0 ? input_buffer_0_ptr : input_buffer_1_ptr;
+  }
+  uint32_t GetCurrentInputBufferPacketCount() const {
+    return current_buffer == 0 ? input_buffer_0_packet_count
+                                : input_buffer_1_packet_count;
+  }
+
   explicit XMA_CONTEXT_DATA(const void* ptr) {
     memory::copy_and_swap(reinterpret_cast<uint32_t*>(this), reinterpret_cast<const uint32_t*>(ptr),
                           sizeof(XMA_CONTEXT_DATA) / 4);
@@ -128,11 +150,23 @@ struct Xma2ExtraData {
 static_assert_size(Xma2ExtraData, 34);
 #pragma pack(pop)
 
+struct kPacketInfo {
+  uint8_t frame_count_;
+  uint8_t current_frame_;
+  uint32_t current_frame_size_;
+  bool isLastFrameInPacket() const {
+    return current_frame_ == frame_count_ - 1;
+  }
+};
+
 class XmaContext {
  public:
   static const uint32_t kBytesPerPacket = 2048;
+  static const uint32_t kBytesPerPacketHeader = 4;
+  static const uint32_t kBytesPerPacketData = kBytesPerPacket - kBytesPerPacketHeader;
   static const uint32_t kBitsPerPacket = kBytesPerPacket * 8;
-  static const uint32_t kBitsPerHeader = 33;
+  static const uint32_t kBitsPerPacketHeader = 32;
+  static const uint32_t kBitsPerFrameHeader = 15;
 
   static const uint32_t kBytesPerSample = 2;
   static const uint32_t kSamplesPerFrame = 512;
@@ -140,8 +174,10 @@ class XmaContext {
   static const uint32_t kBytesPerFrameChannel = kSamplesPerFrame * kBytesPerSample;
   static const uint32_t kBytesPerSubframeChannel = kSamplesPerSubframe * kBytesPerSample;
 
-  // static const uint32_t kOutputBytesPerBlock = 256;
-  // static const uint32_t kOutputMaxSizeBytes = 31 * kOutputBytesPerBlock;
+  static const uint32_t kOutputBytesPerBlock = 256;
+  static const uint32_t kOutputMaxSizeBytes = 31 * kOutputBytesPerBlock;
+  static const uint32_t kMaxFrameSizeinBits = 0x4000 - kBitsPerPacketHeader;
+  static constexpr int kIdToSampleRate[4] = {24000, 32000, 44100, 48000};
 
   explicit XmaContext();
   ~XmaContext();
@@ -167,25 +203,30 @@ class XmaContext {
 
  private:
   static void SwapInputBuffer(XMA_CONTEXT_DATA* data);
-  static bool TrySetupNextLoop(XMA_CONTEXT_DATA* data, bool ignore_input_buffer_offset);
-  static void NextPacket(XMA_CONTEXT_DATA* data);
   static int GetSampleRate(int id);
-  // Get the offset of the next frame. Does not traverse packets.
-  static size_t GetNextFrame(uint8_t* block, size_t size, size_t bit_offset);
-  // Get the containing packet number of the frame pointed to by the offset.
-  static int GetFramePacketNumber(uint8_t* block, size_t size, size_t bit_offset);
-  // Get the packet number and the index of the frame inside that packet
-  static std::tuple<int, int> GetFrameNumber(uint8_t* block, size_t size, size_t bit_offset);
-  // Get the number of frames contained in the packet (including truncated) and
-  // if the last frame is split.
-  static std::tuple<int, bool> GetPacketFrameCount(uint8_t* packet);
+  static int16_t GetPacketNumber(size_t size, size_t bit_offset);
+  const kPacketInfo GetPacketInfo(uint8_t* packet, uint32_t frame_offset);
+  const uint32_t GetAmountOfBitsToRead(const uint32_t remaining_stream_bits,
+                                        const uint32_t frame_size);
+  const uint8_t* GetNextPacket(XMA_CONTEXT_DATA* data, uint32_t next_packet_index,
+                               uint32_t current_input_packet_count);
+  const uint32_t GetNextPacketReadOffset(uint8_t* buffer, uint32_t next_packet_index,
+                                          uint32_t current_input_packet_count);
+  uint8_t* GetCurrentInputBuffer(XMA_CONTEXT_DATA* data);
+  static uint32_t GetCurrentInputBufferSize(XMA_CONTEXT_DATA* data);
 
   // Convert sample format and swap bytes
-  static void ConvertFrame(const uint8_t** samples, bool is_two_channel, uint8_t* output_buffer);
+  static void ConvertFrame(const uint8_t** samples, bool is_two_channel,
+                            uint8_t* output_buffer);
 
-  bool ValidFrameOffset(uint8_t* block, size_t size_bytes, size_t frame_offset_bits);
   void Decode(XMA_CONTEXT_DATA* data);
-  int PrepareDecoder(uint8_t* packet, int sample_rate, bool is_two_channel);
+  void Consume(memory::RingBuffer* output_rb, XMA_CONTEXT_DATA* data);
+  void UpdateLoopStatus(XMA_CONTEXT_DATA* data);
+  int PrepareDecoder(int sample_rate, bool is_two_channel);
+  void PreparePacket(const uint32_t frame_size, const uint32_t frame_padding);
+  bool DecodePacket(AVCodecContext* av_context, const AVPacket* av_packet,
+                    AVFrame* av_frame);
+  memory::RingBuffer PrepareOutputRingBuffer(XMA_CONTEXT_DATA* data);
 
   memory::Memory* memory_ = nullptr;
 
@@ -194,35 +235,22 @@ class XmaContext {
   std::mutex lock_;
   bool is_allocated_ = false;
   bool is_enabled_ = false;
-  // bool is_dirty_ = true;
 
   // ffmpeg structures
   AVPacket* av_packet_ = nullptr;
   AVCodec* av_codec_ = nullptr;
   AVCodecContext* av_context_ = nullptr;
   AVFrame* av_frame_ = nullptr;
-  // uint32_t decoded_consumed_samples_ = 0; // TODO do this dynamically
-  // int decoded_idx_ = -1;
 
-  // bool partial_frame_saved_ = false;
-  // bool partial_frame_size_known_ = false;
-  // size_t partial_frame_total_size_bits_ = 0;
-  // size_t partial_frame_start_offset_bits_ = 0;
-  // size_t partial_frame_offset_bits_ = 0;  // blah internal don't use this
-  // std::vector<uint8_t> partial_frame_buffer_;
-  uint32_t packets_skip_ = 0;
-
-  // bool split_frame_pending_ = false;
-  uint32_t split_frame_len_ = 0;
-  uint32_t split_frame_len_partial_ = 0;
-  uint8_t split_frame_padding_start_ = 0;
+  // Input packet double-buffer (current + next for split frames)
+  std::array<uint8_t, kBytesPerPacketData * 2> input_buffer_;
   // first byte contains bit offset information
   std::array<uint8_t, 1 + 4096> xma_frame_;
-
-  // uint8_t* current_frame_ = nullptr;
   // conversion buffer for 2 channel frame
   std::array<uint8_t, kBytesPerFrameChannel * 2> raw_frame_;
-  // std::vector<uint8_t> current_frame_ = std::vector<uint8_t>(0);
+
+  int32_t remaining_subframe_blocks_in_output_buffer_ = 0;
+  uint8_t current_frame_remaining_subframes_ = 0;
 };
 
 }  // namespace rex::audio
