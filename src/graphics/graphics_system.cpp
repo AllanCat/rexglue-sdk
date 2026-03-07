@@ -334,13 +334,13 @@ void GraphicsSystem::DispatchCallback(uint32_t address, uint32_t context) {
   // CALLBACK_ACK: execute the function stored in CALLBACK_ADDRESS with
   // CALLBACK_CONTEXT (context) as r3. This is the GPU's callback mechanism
   // used by D3D to signal frame-complete KEVENTs (sub_820D50B0 → KeSetEvent).
-  REXGPU_INFO("DispatchCallback: thread={} addr={:08X} ctx={:08X}",
+  REXGPU_TRACE("DispatchCallback: thread={} addr={:08X} ctx={:08X}",
               thread->name(), address, context);
   thread->SetActiveCpu(2);
   uint64_t args[] = {context};
   processor_->ExecuteInterrupt(thread->thread_state(), address, args,
                                rex::countof(args));
-  REXGPU_INFO("DispatchCallback: done addr={:08X}", address);
+  REXGPU_TRACE("DispatchCallback: done addr={:08X}", address);
 }
 
 void GraphicsSystem::MarkVblank() {
@@ -358,7 +358,7 @@ void GraphicsSystem::MarkVblank() {
   auto now = std::chrono::steady_clock::now();
   if (s_vblank_count > 0 && s_vblank_count <= 30) {
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_vblank).count();
-    REXGPU_INFO("MarkVblank #{}: +{}ms interrupt_cb={:08X}", s_vblank_count, elapsed_ms,
+    REXGPU_TRACE("MarkVblank #{}: +{}ms interrupt_cb={:08X}", s_vblank_count, elapsed_ms,
                 interrupt_callback_);
   }
   s_last_vblank = now;
