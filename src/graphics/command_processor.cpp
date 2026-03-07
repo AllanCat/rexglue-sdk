@@ -1043,7 +1043,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
   if (is_memory) {
     static uint32_t s_resolve_count = 0;
     if (++s_resolve_count <= 20) {
-      REXGPU_TRACE("WAIT_REG_MEM resolved #{}: addr={:08X} ref={:08X}",
+      REXGPU_INFO("WAIT_REG_MEM resolved #{}: addr={:08X} ref={:08X}",
                   s_resolve_count, poll_reg_addr, ref);
     }
   }

@@ -135,8 +135,17 @@ bool XmaContext::Work() {
 
   memory::RingBuffer output_rb = PrepareOutputRingBuffer(&data);
 
+  // Minimum free blocks needed before attempting a decode.
+  // Use the number of subframes Consume() will actually write per iteration
+  // (= subframe_decode_count, clamped to 1) plus any headroom requested by
+  // output_buffer_padding.  Using a full-frame worth of space (the old
+  // formula) was far too restrictive: games like TGM Ace use
+  // subframe_decode_count=2 on a small ring buffer and never had 8 free
+  // blocks available, causing the decoder to permanently stall.
+  const uint32_t effective_sdc =
+      std::max(static_cast<uint32_t>(1), data.subframe_decode_count);
   const int32_t minimum_subframe_decode_count =
-      (data.subframe_decode_count * 2) - 1;
+      static_cast<int32_t>(effective_sdc) + data.subframe_skip_count;
 
   if (minimum_subframe_decode_count >
       remaining_subframe_blocks_in_output_buffer_) {

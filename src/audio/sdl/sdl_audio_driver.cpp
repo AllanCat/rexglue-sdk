@@ -118,6 +118,15 @@ void SDLAudioDriver::SubmitFrame(uint32_t frame_ptr) {
 
   {
     std::unique_lock<std::mutex> guard(frames_mutex_);
+    // If a backlog has built up (e.g. after a pause/resume or scheduler spike)
+    // drop the oldest frames so that latency cannot creep beyond 2× the normal
+    // pre-buffer window.  The dropped frames end up on the unused stack so no
+    // memory is leaked.
+    constexpr size_t kMaxQueueDepth = 32;
+    while (frames_queued_.size() >= kMaxQueueDepth) {
+      frames_unused_.push(frames_queued_.front());
+      frames_queued_.pop();
+    }
     frames_queued_.push(output_frame);
   }
 }
@@ -152,43 +161,62 @@ void SDLAudioDriver::SDLCallback(void* userdata, Uint8* stream, int len) {
   assert_true(len ==
               static_cast<int>(sizeof(float) * channel_samples_ * driver->sdl_device_channels_));
 
-  std::unique_lock<std::mutex> guard(driver->frames_mutex_);
-  if (driver->frames_queued_.empty()) {
+  // Pop a frame pointer under the lock but release the lock before the
+  // conversion.  This minimises contention: SubmitFrame() on the audio worker
+  // thread no longer stalls behind the SDL callback thread while float
+  // conversion and volume math are running.
+  float* buffer = nullptr;
+  {
+    std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+    if (!driver->frames_queued_.empty()) {
+      buffer = driver->frames_queued_.front();
+      driver->frames_queued_.pop();
+    }
+  }
+
+  if (!buffer) {
+    // Underrun — output silence.  Do NOT release the semaphore: we want the
+    // audio worker to keep the game producing frames as fast as possible to
+    // refill the queue.
+    std::memset(stream, 0, len);
+    return;
+  }
+
+  if (REXCVAR_GET(audio_mute)) {
     std::memset(stream, 0, len);
   } else {
-    auto buffer = driver->frames_queued_.front();
-    driver->frames_queued_.pop();
-    if (REXCVAR_GET(audio_mute)) {
-      std::memset(stream, 0, len);
-    } else {
-      switch (driver->sdl_device_channels_) {
-        case 2:
-          conversion::sequential_6_BE_to_interleaved_2_LE(reinterpret_cast<float*>(stream), buffer,
-                                                          channel_samples_);
-          break;
-        case 6:
-          conversion::sequential_6_BE_to_interleaved_6_LE(reinterpret_cast<float*>(stream), buffer,
-                                                          channel_samples_);
-          break;
-        default:
-          assert_unhandled_case(driver->sdl_device_channels_);
-          break;
-      }
-      // Apply master volume.
-      const float volume = REXCVAR_GET(audio_volume_pct) * 0.01f;
-      if (volume != 1.0f) {
-        auto* fout = reinterpret_cast<float*>(stream);
-        const int sample_count = len / static_cast<int>(sizeof(float));
-        for (int i = 0; i < sample_count; i++) {
-          fout[i] *= volume;
-        }
+    // Conversion and volume are done with the mutex released.
+    switch (driver->sdl_device_channels_) {
+      case 2:
+        conversion::sequential_6_BE_to_interleaved_2_LE(reinterpret_cast<float*>(stream), buffer,
+                                                        channel_samples_);
+        break;
+      case 6:
+        conversion::sequential_6_BE_to_interleaved_6_LE(reinterpret_cast<float*>(stream), buffer,
+                                                        channel_samples_);
+        break;
+      default:
+        assert_unhandled_case(driver->sdl_device_channels_);
+        break;
+    }
+    // Apply master volume.
+    const float volume = REXCVAR_GET(audio_volume_pct) * 0.01f;
+    if (volume != 1.0f) {
+      auto* fout = reinterpret_cast<float*>(stream);
+      const int sample_count = len / static_cast<int>(sizeof(float));
+      for (int i = 0; i < sample_count; i++) {
+        fout[i] *= volume;
       }
     }
-    driver->frames_unused_.push(buffer);
-
-    auto ret = driver->semaphore_->Release(1, nullptr);
-    assert_true(ret);
   }
+
+  // Return the buffer to the pool and signal the game to produce another frame.
+  {
+    std::unique_lock<std::mutex> guard(driver->frames_mutex_);
+    driver->frames_unused_.push(buffer);
+  }
+  auto ret = driver->semaphore_->Release(1, nullptr);
+  assert_true(ret);
 }
 
 }  // namespace rex::audio::sdl

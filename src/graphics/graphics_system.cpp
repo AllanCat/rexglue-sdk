@@ -168,6 +168,10 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
       }));
   interrupt_worker_thread_->set_name("GPU VBlank Interrupt");
   interrupt_worker_thread_->Create();
+  // Raise to above-normal so the vblank interrupt fires on schedule even when
+  // the game's CPU thread is busy (e.g. during a line-clear animation), reducing
+  // frame jitter.  increment > 0x11 maps to kAboveNormal in SetPriority().
+  interrupt_worker_thread_->SetPriority(0x18);
 
   if (REXCVAR_GET(trace_gpu_stream)) {
     BeginTracing();
@@ -358,7 +362,7 @@ void GraphicsSystem::MarkVblank() {
   auto now = std::chrono::steady_clock::now();
   if (s_vblank_count > 0 && s_vblank_count <= 30) {
     auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_vblank).count();
-    REXGPU_TRACE("MarkVblank #{}: +{}ms interrupt_cb={:08X}", s_vblank_count, elapsed_ms,
+    REXGPU_INFO("MarkVblank #{}: +{}ms interrupt_cb={:08X}", s_vblank_count, elapsed_ms,
                 interrupt_callback_);
   }
   s_last_vblank = now;
