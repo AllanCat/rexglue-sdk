@@ -10,10 +10,17 @@
  */
 
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <utility>
+
+#include <rex/platform.h>
+#if REX_PLATFORM_WIN32
+#include <Windows.h>
+#include <timeapi.h>
+#endif
 
 #include <rex/cvar.h>
 #include <rex/graphics/command_processor.h>
@@ -52,7 +59,7 @@ __declspec(dllexport) uint32_t AmdPowerXpressRequestHighPerformance = 1;
 }  // extern "C"
 #endif  // REX_PLATFORM_WIN32
 
-GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false) {}
+GraphicsSystem::GraphicsSystem() : vsync_worker_running_(false), interrupt_worker_running_(false) {}
 
 GraphicsSystem::~GraphicsSystem() = default;
 
@@ -104,6 +111,13 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
+        // Request 1ms Windows timer resolution so Sleep(1ms) actually sleeps
+        // ~1ms instead of the default ~15.6ms quantum.  Without this the vsync
+        // loop can only fire every 15-16ms and may skip cycles, causing the
+        // effective vsync rate to drop to 30 Hz.
+#if REX_PLATFORM_WIN32
+        timeBeginPeriod(1);
+#endif
         uint64_t vsync_duration = REXCVAR_GET(vsync) ? 16 : 1;
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
@@ -116,12 +130,44 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
           }
           rex::thread::Sleep(std::chrono::milliseconds(1));
         }
+#if REX_PLATFORM_WIN32
+        timeEndPeriod(1);
+#endif
         return 0;
       }));
   // TODO: set_can_debugger_suspend not yet ported
   // vsync_worker_thread_->set_can_debugger_suspend(true);
   vsync_worker_thread_->set_name("GPU VSync");
   vsync_worker_thread_->Create();
+
+  // Interrupt dispatch worker thread.
+  // Executes the guest VBlank interrupt callback (sub_820B8C90) in response to
+  // vblank signals. Running this on a dedicated thread prevents the expensive
+  // ExecuteInterrupt() call from blocking the vsync timer loop and halving the
+  // effective vsync rate to ~30 Hz.
+  interrupt_worker_running_ = true;
+  interrupt_worker_thread_ = system::object_ref<system::XHostThread>(
+      new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
+        while (interrupt_worker_running_) {
+          // Wait for a vblank signal using the counting semaphore.
+          // We must drain one count per iteration so rapid fire vblanks don't
+          // get silently coalesced (unlike a Fence/auto-reset event).
+          {
+            std::unique_lock<std::mutex> lock(vblank_mutex_);
+            vblank_cv_.wait(lock, [this]() {
+              return vblank_pending_ > 0 || !interrupt_worker_running_;
+            });
+            if (!interrupt_worker_running_) {
+              break;
+            }
+            --vblank_pending_;
+          }
+          DispatchInterruptCallback(0, 2);
+        }
+        return 0;
+      }));
+  interrupt_worker_thread_->set_name("GPU VBlank Interrupt");
+  interrupt_worker_thread_->Create();
 
   if (REXCVAR_GET(trace_gpu_stream)) {
     BeginTracing();
@@ -141,6 +187,17 @@ void GraphicsSystem::Shutdown() {
     vsync_worker_running_ = false;
     vsync_worker_thread_->Wait(0, 0, 0, nullptr);
     vsync_worker_thread_.reset();
+  }
+
+  if (interrupt_worker_thread_) {
+    interrupt_worker_running_ = false;
+    {
+      std::unique_lock<std::mutex> lock(vblank_mutex_);
+      vblank_pending_++;  // Wake the worker so it can check the running flag
+    }
+    vblank_cv_.notify_one();
+    interrupt_worker_thread_->Wait(0, 0, 0, nullptr);
+    interrupt_worker_thread_.reset();
   }
 
   if (presenter_) {
@@ -262,6 +319,30 @@ void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
                                rex::countof(args));
 }
 
+void GraphicsSystem::DispatchCallback(uint32_t address, uint32_t context) {
+  if (!address) {
+    return;
+  }
+
+  auto thread = system::XThread::GetCurrentThread();
+  if (!thread) {
+    REXGPU_WARN("DispatchCallback: no current XThread! addr={:08X} ctx={:08X}",
+                address, context);
+    return;
+  }
+
+  // CALLBACK_ACK: execute the function stored in CALLBACK_ADDRESS with
+  // CALLBACK_CONTEXT (context) as r3. This is the GPU's callback mechanism
+  // used by D3D to signal frame-complete KEVENTs (sub_820D50B0 → KeSetEvent).
+  REXGPU_INFO("DispatchCallback: thread={} addr={:08X} ctx={:08X}",
+              thread->name(), address, context);
+  thread->SetActiveCpu(2);
+  uint64_t args[] = {context};
+  processor_->ExecuteInterrupt(thread->thread_state(), address, args,
+                               rex::countof(args));
+  REXGPU_INFO("DispatchCallback: done addr={:08X}", address);
+}
+
 void GraphicsSystem::MarkVblank() {
   // TODO: Enable profiling once ported
   // SCOPE_profile_cpu_f("gpu");
@@ -271,10 +352,30 @@ void GraphicsSystem::MarkVblank() {
     command_processor_->increment_counter();
   }
 
-  // TODO(benvanik): we shouldn't need to do the dispatch here, but there's
-  //     something wrong and the CP will block waiting for code that
-  //     needs to be run in the interrupt.
-  DispatchInterruptCallback(0, 2);
+  // Log vblank timing for debugging 30fps issue
+  static uint32_t s_vblank_count = 0;
+  static std::chrono::steady_clock::time_point s_last_vblank;
+  auto now = std::chrono::steady_clock::now();
+  if (s_vblank_count > 0 && s_vblank_count <= 30) {
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_last_vblank).count();
+    REXGPU_INFO("MarkVblank #{}: +{}ms interrupt_cb={:08X}", s_vblank_count, elapsed_ms,
+                interrupt_callback_);
+  }
+  s_last_vblank = now;
+  ++s_vblank_count;
+
+  // Signal the interrupt worker thread to dispatch the VBlank interrupt.
+  // Previously DispatchInterruptCallback(0, 2) was called directly here, but
+  // ExecuteInterrupt() takes ~14ms executing guest code (sub_820B8C90), which
+  // blocks this 1ms-sleep vsync timer loop and halves its effective rate to
+  // ~30Hz.  By signalling a dedicated worker thread we return immediately and
+  // keep the vsync firing at 60Hz.  Using a counting semaphore (not a simple
+  // Fence) ensures rapid back-to-back vblanks are never silently coalesced.
+  {
+    std::unique_lock<std::mutex> lock(vblank_mutex_);
+    ++vblank_pending_;
+  }
+  vblank_cv_.notify_one();
 }
 
 void GraphicsSystem::ClearCaches() {

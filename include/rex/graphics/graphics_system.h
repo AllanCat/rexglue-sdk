@@ -74,6 +74,9 @@ class GraphicsSystem : public system::IGraphicsSystem {
 
   virtual void SetInterruptCallback(uint32_t callback, uint32_t user_data);
   void DispatchInterruptCallback(uint32_t source, uint32_t cpu);
+  // Executes an arbitrary guest callback function directly (used for GPU
+  // CALLBACK_ACK handling). Calls |address| with |context| as r3.
+  void DispatchCallback(uint32_t address, uint32_t context);
 
   virtual void ClearCaches();
 
@@ -116,6 +119,18 @@ class GraphicsSystem : public system::IGraphicsSystem {
 
   std::atomic<bool> vsync_worker_running_;
   system::object_ref<system::XHostThread> vsync_worker_thread_;
+
+  // Dedicated interrupt-dispatch thread: receives vblank signals from the
+  // vsync timer and executes the guest interrupt callback without blocking
+  // the vsync timer loop.
+  std::atomic<bool> interrupt_worker_running_;
+  system::object_ref<system::XHostThread> interrupt_worker_thread_;
+  // Counting semaphore for vblank events — using mutex+cv+counter so that
+  // rapid back-to-back vblank signals are never silently coalesced (unlike a
+  // simple auto-reset event/Fence).
+  std::mutex vblank_mutex_;
+  std::condition_variable vblank_cv_;
+  int vblank_pending_ = 0;
 
   RegisterFile register_file_;
   std::unique_ptr<CommandProcessor> command_processor_;

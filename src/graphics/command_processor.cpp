@@ -466,6 +466,27 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
           OnGammaRamp256EntryTableValueWritten();
         }
       } break;
+
+      case XE_GPU_REG_CALLBACK_ACK: {
+        // Writing CALLBACK_ACK triggers execution of the callback stored in
+        // CALLBACK_ADDRESS with CALLBACK_CONTEXT as r3. On real hardware this
+        // is the GPU notifying the CPU that a frame-present PM4 packet was
+        // processed. The game (sub_820D50B0) calls KeSetEvent to signal the
+        // frame-complete KEVENT, allowing sub_820D4FC8 to proceed at 60fps
+        // instead of falling back to its 30ms timeout.
+        uint32_t callback_addr =
+            register_file_->values[XE_GPU_REG_CALLBACK_ADDRESS];
+        uint32_t callback_ctx =
+            register_file_->values[XE_GPU_REG_CALLBACK_CONTEXT];
+        static uint32_t s_ack_count = 0;
+        REXGPU_INFO("CALLBACK_ACK #{}: addr={:08X} ctx={:08X} value={:08X}",
+                    ++s_ack_count, callback_addr, callback_ctx, value);
+        if (callback_addr) {
+          graphics_system_->DispatchCallback(callback_addr, callback_ctx);
+        } else {
+          REXGPU_WARN("CALLBACK_ACK fired but CALLBACK_ADDRESS is 0!");
+        }
+      } break;
     }
   }
 }
@@ -987,6 +1008,17 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
     if (!matched) {
       // Wait.
       if (wait >= 0x100) {
+        static uint32_t s_wait_warn = 0;
+        static std::chrono::steady_clock::time_point s_stall_start;
+        if ((++s_wait_warn & 0x3F) == 1) {
+          // Log every 64th stall to avoid flooding; record stall start time.
+          s_stall_start = std::chrono::steady_clock::now();
+          REXGPU_WARN(
+              "WAIT_REG_MEM stalling begin: is_mem={} addr={:08X} cond={} "
+              "val={:08X} ref={:08X} mask={:08X}",
+              (int)is_memory, poll_reg_addr, wait_info & 0x7, (uint32_t)value_ref,
+              ref, mask);
+        }
         PrepareForWait();
         if (!REXCVAR_GET(vsync)) {
           // User wants it fast and dangerous.
@@ -1006,6 +1038,15 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
       }
     }
   } while (!matched);
+
+  // Log first few resolves with timing
+  if (is_memory) {
+    static uint32_t s_resolve_count = 0;
+    if (++s_resolve_count <= 20) {
+      REXGPU_INFO("WAIT_REG_MEM resolved #{}: addr={:08X} ref={:08X}",
+                  s_resolve_count, poll_reg_addr, ref);
+    }
+  }
 
   return true;
 }
