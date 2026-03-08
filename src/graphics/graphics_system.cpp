@@ -104,17 +104,36 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
-        uint64_t vsync_duration = REXCVAR_GET(vsync) ? 16 : 1;
+        // Precise 60.0 Hz timing using guest ticks (50 MHz)
+        // 60 Hz = 1/60 sec = 16.6667ms = 833,333 ticks at 50 MHz
+        // Fast mode (vsync off) = 1ms = 50,000 ticks
+        const uint64_t vsync_duration_ticks = REXCVAR_GET(vsync) ? 833333 : 50000;
+        const uint64_t precision_threshold = 100000;  // 2ms in ticks (for precision loop)
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
-          uint64_t elapsed =
-              (current_time - last_frame_time) / (chrono::Clock::guest_tick_frequency() / 1000);
-          if (elapsed >= vsync_duration) {
+          uint64_t elapsed = current_time - last_frame_time;
+          
+          if (elapsed >= vsync_duration_ticks) {
             MarkVblank();
-            last_frame_time = current_time;
+            last_frame_time += vsync_duration_ticks;  // Accumulate for precision
+          } else {
+            // Calculate remaining time until next vblank
+            uint64_t remaining = vsync_duration_ticks - elapsed;
+            
+            if (remaining > precision_threshold) {
+              // Sleep for most of the remaining time (leave 2ms for precision)
+              uint64_t sleep_ticks = remaining - precision_threshold;
+              // Convert ticks to milliseconds: 50MHz = 50,000 ticks/ms
+              uint64_t sleep_ms = sleep_ticks / 50000;
+              if (sleep_ms > 0) {
+                rex::thread::Sleep(std::chrono::milliseconds(sleep_ms));
+              }
+            } else {
+              // Close to vblank - yield instead of sleep for precision
+              std::this_thread::yield();
+            }
           }
-          rex::thread::Sleep(std::chrono::milliseconds(1));
         }
         return 0;
       }));

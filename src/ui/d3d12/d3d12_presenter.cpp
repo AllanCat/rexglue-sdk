@@ -22,6 +22,7 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 #include <rex/ui/surface_win.h>
+#include <rex/graphics/flags.h>
 
 REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
                     "Allow variable refresh rate and tearing");
@@ -302,6 +303,15 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
           "interface");
       return SurfacePaintConnectResult::kFailure;
     }
+
+    // Set maximum frame latency to 1 for lowest possible input lag and reduced jitter
+    // This limits how many frames can be queued ahead, reducing buffering latency
+    Microsoft::WRL::ComPtr<IDXGIDevice1> dxgi_device;
+    if (SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&dxgi_device)))) {
+      dxgi_device->SetMaximumFrameLatency(1);
+      REXLOG_DEBUG("D3D12Presenter: Set maximum frame latency to 1 for reduced input lag");
+    }
+
     // From now on, in case of any failure, DestroySwapChain must be called
     // before returning.
     paint_context_.swap_chain_width = new_swap_chain_width;
@@ -933,17 +943,15 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
     ui_submission_tracker_.NextSubmission();
   }
   paint_context_.paint_submission_tracker.NextSubmission();
-  // Present as soon as possible, without waiting for vsync (the host refresh
-  // rate may be something like 144 Hz, which is not a multiple of the common
-  // 30 Hz or 60 Hz guest refresh rate), and allowing dropping outdated queued
-  // frames for lower latency. Also, if possible, allowing tearing to use
-  // variable refresh rate in borderless fullscreen (note that if DXGI
-  // fullscreen is ever used in, the allow tearing flag must not be passed in
-  // fullscreen, but DXGI fullscreen is largely unneeded with the flip
-  // presentation model used in Direct3D 12).
+  // Present with optional vsync based on CVAR setting.
+  // When vsync=true: sync to display refresh (1 = wait for vblank)
+  // When vsync=false: present immediately (0 = no wait)
+  // Tearing is only allowed when vsync is disabled.
+  const bool use_vsync = REXCVAR_GET(vsync);
   HRESULT present_result = paint_context_.swap_chain->Present(
-      0, DXGI_PRESENT_RESTART |
-             (paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
+      use_vsync ? 1 : 0,
+      DXGI_PRESENT_RESTART |
+          (!use_vsync && paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.
