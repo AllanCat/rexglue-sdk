@@ -126,32 +126,39 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
-        // Precise 60.0 Hz timing using guest ticks (50 MHz)
-        // 60 Hz = 1/60 sec = 16.6667ms = 833,333 ticks at 50 MHz
-        // Fast mode (vsync off) = 1ms = 50,000 ticks
-        const uint64_t vsync_duration_ticks = REXCVAR_GET(vsync) ? 833333 : 50000;
+        system::X_VIDEO_MODE video_mode;
+        kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
+        double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
+        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
+        uint64_t vsync_interval_ticks =
+            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+        // ticks_per_ms for adaptive sleep calculation (50 MHz → 50,000 ticks/ms)
+        const uint64_t ticks_per_ms = std::max(uint64_t(1), guest_tick_frequency / 1000);
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
-          uint64_t elapsed = current_time - last_frame_time;
-
-          if (elapsed >= vsync_duration_ticks) {
+          uint64_t interval_ticks =
+              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
+          if (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
-            last_frame_time += vsync_duration_ticks;  // Accumulate for precision
-          } else {
-            // Calculate time until next vblank
-            uint64_t remaining_ticks = vsync_duration_ticks - elapsed;
-            // Convert to milliseconds: 50MHz = 50,000 ticks/ms
-            uint64_t remaining_ms = remaining_ticks / 50000;
-            
-            // Sleep for most of the remaining time, but keep at least 0.5ms for precision
-            // This avoids busy-waiting while maintaining good timing accuracy
-            if (remaining_ms > 0) {
-              rex::thread::Sleep(std::chrono::milliseconds(remaining_ms));
-            } else {
-              // < 1ms remaining - sleep 0.5ms to avoid 100% CPU spin
-              rex::thread::Sleep(std::chrono::microseconds(500));
+            // Accumulate rather than reset: prevents 1-sleep-interval drift per vblank.
+            // Using "= current_time" causes each vblank to fire ~1ms late due to sleep
+            // granularity and this error never self-corrects (results in ~58.8 Hz instead
+            // of 60 Hz). Using "+= interval_ticks" lets small overshoots cancel out.
+            last_frame_time += interval_ticks;
+            // Safety clamp: if we've fallen far behind (e.g., paused in debugger or
+            // very slow frame), don't fire a burst of catch-up vblanks.
+            if (current_time - last_frame_time > interval_ticks) {
+              last_frame_time = current_time - interval_ticks;
             }
+          } else {
+            // Adaptive sleep: sleep most of the remaining time.
+            // When remaining_ms == 0 (< 1ms left), Sleep(0) yields once to
+            // avoid a busy-spin while still being responsive.
+            uint64_t elapsed = current_time - last_frame_time;
+            uint64_t remaining_ms = (interval_ticks - elapsed) / ticks_per_ms;
+            rex::thread::Sleep(std::chrono::milliseconds(remaining_ms));
           }
         }
         return 0;
