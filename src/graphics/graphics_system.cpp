@@ -126,19 +126,16 @@ X_STATUS GraphicsSystem::Setup(runtime::Processor* processor, system::KernelStat
   vsync_worker_running_ = true;
   vsync_worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
-        system::X_VIDEO_MODE video_mode;
-        kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
-        double refresh_rate_hz = std::max(1.0, double(float(video_mode.refresh_rate)));
-        uint64_t guest_tick_frequency = chrono::Clock::guest_tick_frequency();
-        uint64_t vsync_interval_ticks =
-            std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
-        uint64_t no_vsync_interval_ticks = std::max(uint64_t(1), guest_tick_frequency / 1000);
+        // Precise 60.0 Hz timing using guest ticks (50 MHz)
+        // 60 Hz = 1/60 sec = 16.6667ms = 833,333 ticks at 50 MHz
+        // Fast mode (vsync off) = 1ms = 50,000 ticks
+        const uint64_t vsync_duration_ticks = REXCVAR_GET(vsync) ? 833333 : 50000;
         uint64_t last_frame_time = chrono::Clock::QueryGuestTickCount();
         while (vsync_worker_running_) {
           uint64_t current_time = chrono::Clock::QueryGuestTickCount();
-          uint64_t interval_ticks =
-              REXCVAR_GET(vsync) ? vsync_interval_ticks : no_vsync_interval_ticks;
-          if (current_time - last_frame_time >= interval_ticks) {
+          uint64_t elapsed = current_time - last_frame_time;
+
+          if (elapsed >= vsync_duration_ticks) {
             MarkVblank();
             last_frame_time += vsync_duration_ticks;  // Accumulate for precision
           } else {
