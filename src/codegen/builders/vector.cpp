@@ -18,6 +18,8 @@
 
 #include <rex/logging.h>
 
+#include "../codegen_logging.h"
+
 #include <ppc.h>
 
 namespace rex::codegen {
@@ -433,6 +435,16 @@ bool build_vavgsh(BuilderContext& ctx) {
   return true;
 }
 
+bool build_vavgsw(BuilderContext& ctx) {
+  ctx.println(
+      "\tsimde_mm_store_si128((simde__m128i*){}.s32, "
+      "rex::simde_mm_avg_epi32("
+      "simde_mm_load_si128((simde__m128i*){}.s32), "
+      "simde_mm_load_si128((simde__m128i*){}.s32)));",
+      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+  return true;
+}
+
 bool build_vavgub(BuilderContext& ctx) {
   ctx.emit_vec_int_binary("avg_epu8", "u8");
   return true;
@@ -664,6 +676,18 @@ bool build_vcmpgtuw(BuilderContext& ctx) {
     ctx.println(
         "\t{}.setFromMask(simde_mm_castsi128_ps(simde_mm_load_si128((simde__m128i*){}.u32)), 0xF);",
         ctx.cr(6), ctx.v(ctx.insn.operands[0]));
+  return true;
+}
+
+bool build_vcmpgtsb(BuilderContext& ctx) {
+  ctx.println(
+      "\tsimde_mm_store_si128((simde__m128i*){}.u8, "
+      "simde_mm_cmpgt_epi8(simde_mm_load_si128((simde__m128i*){}.u8), "
+      "simde_mm_load_si128((simde__m128i*){}.u8)));",
+      ctx.v(ctx.insn.operands[0]), ctx.v(ctx.insn.operands[1]), ctx.v(ctx.insn.operands[2]));
+  if (isRecordForm(ctx.insn))
+    ctx.println("\t{}.setFromMask(simde_mm_load_si128((simde__m128i*){}.u8), 0xFFFF);", ctx.cr(6),
+                ctx.v(ctx.insn.operands[0]));
   return true;
 }
 
@@ -927,7 +951,7 @@ bool build_vrlw(BuilderContext& ctx) {
   // TODO(tomc): vectorize
   for (size_t i = 0; i < 4; i++) {
     ctx.println("\t{{ uint32_t sh = {}.u32[{}] & 0x1F;", ctx.v(ctx.insn.operands[2]), i);
-    ctx.println("\t{}.u32[{}] = ({}.u32[{}] << sh) | ({}.u32[{}] >> (32 - sh)); }}",
+    ctx.println("\t{}.u32[{}] = ({}.u32[{}] << sh) | (sh ? ({}.u32[{}] >> (32 - sh)) : 0); }}",
                 ctx.v(ctx.insn.operands[0]), i, ctx.v(ctx.insn.operands[1]), i,
                 ctx.v(ctx.insn.operands[1]), i);
   }
@@ -1026,14 +1050,18 @@ bool build_vsplth(BuilderContext& ctx) {
 }
 
 bool build_vspltisb(BuilderContext& ctx) {
+  // Sign-extend 5-bit immediate to 8-bit
+  int8_t imm5 = static_cast<int8_t>(ctx.insn.operands[1] << 3) >> 3;
   ctx.println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_set1_epi8(char(0x{:X})));",
-              ctx.v(ctx.insn.operands[0]), ctx.insn.operands[1]);
+              ctx.v(ctx.insn.operands[0]), static_cast<uint8_t>(imm5));
   return true;
 }
 
 bool build_vspltisw(BuilderContext& ctx) {
+  // Sign-extend 5-bit immediate to 32-bit
+  int8_t imm5 = static_cast<int8_t>(ctx.insn.operands[1] << 3) >> 3;
   ctx.println("\tsimde_mm_store_si128((simde__m128i*){}.u32, simde_mm_set1_epi32(int(0x{:X})));",
-              ctx.v(ctx.insn.operands[0]), ctx.insn.operands[1]);
+              ctx.v(ctx.insn.operands[0]), static_cast<uint32_t>(static_cast<int32_t>(imm5)));
   return true;
 }
 

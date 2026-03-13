@@ -106,6 +106,15 @@ bool build_lhau(BuilderContext& ctx) {
   return true;
 }
 
+bool build_lhaux(BuilderContext& ctx) {
+  // Load Halfword Algebraic with Update Indexed: EA = rA + rB; rD = EXTS(MEM16(EA)); rA = EA
+  ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
+              ctx.r(ctx.insn.operands[2]));
+  ctx.println("\t{}.s64 = int16_t(PPC_LOAD_U16({}));", ctx.r(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
+  return true;
+}
+
 bool build_lhbrx(BuilderContext& ctx) {
   // Load Halfword Byte-Reverse Indexed
   ctx.print("\t{}.u64 = __builtin_bswap16({}(", ctx.r(ctx.insn.operands[0]),
@@ -122,6 +131,15 @@ bool build_lhbrx(BuilderContext& ctx) {
 
 bool build_lwa(BuilderContext& ctx) {
   emitSignExtendLoadDForm(ctx, "int32_t", "PPC_LOAD_U32");
+  return true;
+}
+
+bool build_lwaux(BuilderContext& ctx) {
+  // Load Word Algebraic with Update Indexed: EA = rA + rB; rD = EXTS(MEM32(EA)); rA = EA
+  ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
+              ctx.r(ctx.insn.operands[2]));
+  ctx.println("\t{}.s64 = int32_t(PPC_LOAD_U32({}));", ctx.r(ctx.insn.operands[0]), ctx.ea());
+  ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
   return true;
 }
 
@@ -435,6 +453,16 @@ bool build_stfdx(BuilderContext& ctx) {
   return true;
 }
 
+bool build_stfdux(BuilderContext& ctx) {
+  // Store Floating-point Double with Update Indexed: EA = rA + rB; MEM(EA) = FRS; rA = EA
+  ctx.emit_set_flush_mode(false);
+  ctx.println("\t{} = {}.u32 + {}.u32;", ctx.ea(), ctx.r(ctx.insn.operands[1]),
+              ctx.r(ctx.insn.operands[2]));
+  ctx.println("\tPPC_STORE_U64({}, {}.u64);", ctx.ea(), ctx.f(ctx.insn.operands[0]));
+  ctx.println("\t{}.u32 = {};", ctx.r(ctx.insn.operands[1]), ctx.ea());
+  return true;
+}
+
 bool build_stfiwx(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
   ctx.print("{}", ctx.mmio_check_x_form() ? "\tPPC_MM_STORE_U32(" : "\tPPC_STORE_U32(");
@@ -510,6 +538,32 @@ bool build_lvx(BuilderContext& ctx) {
       "simde_mm_shuffle_epi8(simde_mm_load_si128((simde__m128i*)PPC_RAW_ADDR({})), "
       "simde_mm_load_si128((simde__m128i*)VectorMaskL)));",
       ctx.v(ctx.insn.operands[0]), ctx.ea());
+  return true;
+}
+
+bool build_lvebx(BuilderContext& ctx) {
+  emitVectorEA(ctx);
+  ctx.println("\tmemset({}.u8, 0, 16);", ctx.v(ctx.insn.operands[0]));
+  ctx.println("\t{}.u8[15 - ({} & 0xF)] = *(uint8_t*)PPC_RAW_ADDR({});",
+              ctx.v(ctx.insn.operands[0]), ctx.ea(), ctx.ea());
+  return true;
+}
+
+bool build_lvehx(BuilderContext& ctx) {
+  emitVectorEA(ctx);
+  ctx.println("\tmemset({}.u8, 0, 16);", ctx.v(ctx.insn.operands[0]));
+  ctx.println("\t{{ uint32_t idx = ({} >> 1) & 0x7;", ctx.ea());
+  ctx.println("\t{}.u16[7 - idx] = PPC_LOAD_U16({} & ~1); }}", ctx.v(ctx.insn.operands[0]),
+              ctx.ea());
+  return true;
+}
+
+bool build_lvewx(BuilderContext& ctx) {
+  emitVectorEA(ctx);
+  ctx.println("\tmemset({}.u8, 0, 16);", ctx.v(ctx.insn.operands[0]));
+  ctx.println("\t{{ uint32_t idx = ({} >> 2) & 0x3;", ctx.ea());
+  ctx.println("\t{}.u32[3 - idx] = PPC_LOAD_U32({} & ~3); }}", ctx.v(ctx.insn.operands[0]),
+              ctx.ea());
   return true;
 }
 

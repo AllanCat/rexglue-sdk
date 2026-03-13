@@ -16,6 +16,8 @@
 #include <queue>
 
 #include <rex/logging.h>
+
+#include "codegen_logging.h"
 #include <rex/types.h>
 
 namespace rex::codegen {
@@ -555,6 +557,16 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
         target = baseAddr + *val;
         break;
       }
+    }
+
+    // PPC instructions must be 4-byte aligned
+    if (target & 3) {
+      REXCODEGEN_TRACE(
+          "detectJumpTable: bctr=0x{:08X} entry[{}] target=0x{:08X} not 4-byte aligned", bctrAddr,
+          i, target);
+      if (jt.targets.empty())
+        return std::nullopt;
+      break;
     }
 
     // Validate target is within code region - jump table targets help DEFINE function extent

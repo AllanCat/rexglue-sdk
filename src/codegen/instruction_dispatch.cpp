@@ -15,6 +15,8 @@
 
 #include <rex/logging.h>
 
+#include "codegen_logging.h"
+
 #include <dis-asm.h>
 #include <ppc-inst.h>
 #include <ppc.h>
@@ -80,6 +82,9 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_EXTSH, build_extsh},
       {PPC_INST_EXTSW, build_extsw},
       {PPC_INST_CLRLWI, build_clrlwi},
+      {PPC_INST_RLDCL, build_rldcl},
+      {PPC_INST_RLDCR, build_rldcr},
+      {PPC_INST_RLDIC, build_rldic},
       {PPC_INST_RLDICL, build_rldicl},
       {PPC_INST_RLDICR, build_rldicr},
       {PPC_INST_RLDIMI, build_rldimi},
@@ -137,6 +142,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_BDZLR, build_bdzlr},
       {PPC_INST_BDNZ, build_bdnz},
       {PPC_INST_BDNZF, build_bdnzf},
+      {PPC_INST_BDNZLR, build_bdnzlr},
       {PPC_INST_BDNZT, build_bdnzt},
       {PPC_INST_BEQ, build_beq},
       {PPC_INST_BEQLR, build_beqlr},
@@ -206,6 +212,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_LBZUX, build_lbzux},
       {PPC_INST_LHA, build_lha},
       {PPC_INST_LHAU, build_lhau},
+      {PPC_INST_LHAUX, build_lhaux},
       {PPC_INST_LHAX, build_lhax},
       {PPC_INST_LHBRX, build_lhbrx},
       {PPC_INST_LHZ, build_lhz},
@@ -213,6 +220,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_LHZUX, build_lhzux},
       {PPC_INST_LHZX, build_lhzx},
       {PPC_INST_LWA, build_lwa},
+      {PPC_INST_LWAUX, build_lwaux},
       {PPC_INST_LWAX, build_lwax},
       {PPC_INST_LWZ, build_lwz},
       {PPC_INST_LWZU, build_lwzu},
@@ -259,6 +267,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_STDUX, build_stdux},
       {PPC_INST_STFD, build_stfd},
       {PPC_INST_STFDU, build_stfdu},
+      {PPC_INST_STFDUX, build_stfdux},
       {PPC_INST_STFDX, build_stfdx},
       {PPC_INST_STFIWX, build_stfiwx},
       {PPC_INST_STFS, build_stfs},
@@ -278,10 +287,10 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_LVRX128, build_lvrx},
       {PPC_INST_LVSL, build_lvsl},
       {PPC_INST_LVSR, build_lvsr},
-      {PPC_INST_LVEBX, build_lvx},  // Same as LVX for our purposes
-      {PPC_INST_LVEHX, build_lvx},  // Same as LVX for our purposes
-      {PPC_INST_LVEWX, build_lvx},  // Same as LVX for our purposes
-      {PPC_INST_LVEWX128, build_lvx},
+      {PPC_INST_LVEBX, build_lvebx},
+      {PPC_INST_LVEHX, build_lvehx},
+      {PPC_INST_LVEWX, build_lvewx},
+      {PPC_INST_LVEWX128, build_lvewx},
 
       //=====================================================================
       // Memory - Vector Stores
@@ -373,13 +382,18 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_DCBST, build_dcbst},
       {PPC_INST_MR, build_mr},
       {PPC_INST_MCRF, build_mcrf},
+      {PPC_INST_MFXER, build_mfxer},
+      {PPC_INST_MFCTR, build_mfctr},
       {PPC_INST_MFCR, build_mfcr},
       {PPC_INST_MFOCRF, build_mfocrf},
       {PPC_INST_MFLR, build_mflr},
       {PPC_INST_MFMSR, build_mfmsr},
       {PPC_INST_MFFS, build_mffs},
       {PPC_INST_MFTB, build_mftb},
+      {PPC_INST_MFTBU, build_mftbu},
       {PPC_INST_MTCR, build_mtcr},
+      {PPC_INST_MTCRF, build_mtcrf},
+      {PPC_INST_MTOCRF, build_mtcrf},
       {PPC_INST_MTCTR, build_mtctr},
       {PPC_INST_MTLR, build_mtlr},
       {PPC_INST_MTMSRD, build_mtmsrd},
@@ -468,6 +482,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       //=====================================================================
       {PPC_INST_VAVGSB, build_vavgsb},
       {PPC_INST_VAVGSH, build_vavgsh},
+      {PPC_INST_VAVGSW, build_vavgsw},
       {PPC_INST_VAVGUB, build_vavgub},
       {PPC_INST_VAVGUH, build_vavguh},
 
@@ -505,6 +520,7 @@ static const std::unordered_map<int, Builder>& GetDispatchTable() {
       {PPC_INST_VCMPGTUB, build_vcmpgtub},
       {PPC_INST_VCMPGTUH, build_vcmpgtuh},
       {PPC_INST_VCMPGTUW, build_vcmpgtuw},
+      {PPC_INST_VCMPGTSB, build_vcmpgtsb},
       {PPC_INST_VCMPGTSH, build_vcmpgtsh},
       {PPC_INST_VCMPGTSW, build_vcmpgtsw},
 

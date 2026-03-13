@@ -26,6 +26,10 @@ if(REXGLUE_USE_VULKAN)
     )
 endif()
 
+if(REXGLUE_ENABLE_FIDELITYFX)
+    list(APPEND REQUIRED_SUBMODULES FidelityFX)
+endif()
+
 if(REXGLUE_BUILD_TESTS)
     list(APPEND REQUIRED_SUBMODULES catch2)
 endif()
@@ -103,6 +107,20 @@ target_include_directories(mspack PUBLIC
 # Suppress warnings in third-party C code
 target_compile_options(mspack PRIVATE -w)
 
+# o1heap - O(1) heap allocator for real-time systems (used by rexcrt heap)
+# NOTE: o1heap.c auto-detects CLZ via __builtin_clzl when __clang__/__GNUC__
+# are defined, but on Windows unsigned long is 32-bit even on x64.  We inject
+# a config header that provides a correct 64-bit CLZ
+add_library(o1heap STATIC
+    o1heap/o1heap/o1heap.c
+)
+target_include_directories(o1heap PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/o1heap/o1heap>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_compile_definitions(o1heap PRIVATE
+    "O1HEAP_CONFIG_HEADER=\"${CMAKE_CURRENT_SOURCE_DIR}/../include/rex/o1heap_config.h\"")
+target_compile_options(o1heap PRIVATE -w)
+
 # xxHash - extremely fast non-cryptographic hash (git submodule)
 set(XXHASH_BUILD_XXHSUM OFF CACHE BOOL "" FORCE)
 add_subdirectory(xxHash/cmake_unofficial)
@@ -168,6 +186,80 @@ if(REXGLUE_USE_VULKAN)
     target_link_libraries(volk PUBLIC Vulkan::Headers)
     target_link_libraries(volk_headers INTERFACE Vulkan::Headers)
     target_compile_options(volk PRIVATE -w)
+endif()
+
+#=============================================================================
+# FidelityFX (optional)
+#=============================================================================
+if(REXGLUE_ENABLE_FIDELITYFX)
+    set(REXGLUE_FIDELITYFX_BACKEND "auto" CACHE STRING
+        "FidelityFX backend to build (auto, vk, dx12)")
+    set_property(CACHE REXGLUE_FIDELITYFX_BACKEND PROPERTY STRINGS auto vk dx12)
+    set(_rexglue_fidelityfx_backend "${REXGLUE_FIDELITYFX_BACKEND}")
+    string(TOLOWER "${_rexglue_fidelityfx_backend}" _rexglue_fidelityfx_backend)
+
+    if(_rexglue_fidelityfx_backend STREQUAL "auto")
+        if(WIN32 AND REXGLUE_USE_D3D12)
+            set(_rexglue_fidelityfx_backend "dx12")
+        elseif(REXGLUE_USE_VULKAN)
+            set(_rexglue_fidelityfx_backend "vk")
+        elseif(REXGLUE_USE_D3D12)
+            set(_rexglue_fidelityfx_backend "dx12")
+        endif()
+    endif()
+
+    if(_rexglue_fidelityfx_backend STREQUAL "vk")
+        if(NOT REXGLUE_USE_VULKAN)
+            message(FATAL_ERROR
+                "REXGLUE_FIDELITYFX_BACKEND=vk requires REXGLUE_USE_VULKAN=ON")
+        endif()
+        set(FFX_API_BACKEND VK_X64 CACHE STRING "" FORCE)
+    elseif(_rexglue_fidelityfx_backend STREQUAL "dx12")
+        if(NOT REXGLUE_USE_D3D12)
+            message(FATAL_ERROR
+                "REXGLUE_FIDELITYFX_BACKEND=dx12 requires REXGLUE_USE_D3D12=ON")
+        endif()
+        set(FFX_API_BACKEND DX12_X64 CACHE STRING "" FORCE)
+    elseif(_rexglue_fidelityfx_backend STREQUAL "")
+        message(FATAL_ERROR "FidelityFX requires a supported graphics backend")
+    else()
+        message(FATAL_ERROR
+            "Invalid REXGLUE_FIDELITYFX_BACKEND='${REXGLUE_FIDELITYFX_BACKEND}' "
+            "(expected auto, vk, or dx12)")
+    endif()
+
+    if(REXGLUE_USE_VULKAN AND REXGLUE_USE_D3D12)
+        message(STATUS
+            "FidelityFX backend selected for this build: ${_rexglue_fidelityfx_backend}")
+    endif()
+
+    set(FFX_API_ENABLE_FRAMEGEN_PROVIDER OFF CACHE BOOL "" FORCE)
+    if(WIN32)
+        set(FFX_API_AUTO_COMPILE_SHADERS ON CACHE BOOL "" FORCE)
+    else()
+        set(FFX_API_AUTO_COMPILE_SHADERS OFF CACHE BOOL "" FORCE)
+    endif()
+    add_subdirectory(FidelityFX/ffx-api EXCLUDE_FROM_ALL)
+
+    # The upstream FidelityFX targets expose source-tree include paths in
+    # INTERFACE_INCLUDE_DIRECTORIES, which breaks our install export checks.
+    # We only link against these targets internally, so no public includes are
+    # needed on the exported interface.
+    if(TARGET amd_fidelityfx_vk)
+        set_target_properties(amd_fidelityfx_vk PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ""
+        )
+    endif()
+    if(TARGET amd_fidelityfx_dx12)
+        set_target_properties(amd_fidelityfx_dx12 PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES ""
+        )
+    endif()
+
+    # FidelityFX's toolchain.cmake force-sets CMAKE_GENERATOR_PLATFORM (for VS generators).
+    # With Ninja this variable is invalid and poisons every subsequent try_compile() call.
+    # Clear it from the cache.
+    unset(CMAKE_GENERATOR_PLATFORM CACHE)
 endif()
 
 #=============================================================================

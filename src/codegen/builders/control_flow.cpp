@@ -16,6 +16,8 @@
 
 #include <rex/logging.h>
 
+#include "../codegen_logging.h"
+
 namespace rex::codegen {
 
 //=============================================================================
@@ -95,7 +97,12 @@ bool build_blr(BuilderContext& ctx) {
 }
 
 bool build_blrl(BuilderContext& ctx) {
-  ctx.println("__builtin_debugtrap();");
+  // BLRL: save return address, then branch-and-link to current LR
+  ctx.println("\t{{ auto old_lr = ctx.lr;");
+  if (!ctx.config().skipLr)
+    ctx.println("\tctx.lr = 0x{:X};", ctx.base + 4);
+  ctx.println("\tPPC_CALL_INDIRECT_FUNC(uint32_t(old_lr)); }}");
+  ctx.csrState = CSRState::Unknown;
   return true;
 }
 
@@ -207,6 +214,12 @@ bool build_bdz(BuilderContext& ctx) {
 bool build_bdzlr(BuilderContext& ctx) {
   ctx.println("\t--{}.u64;", ctx.ctr());
   ctx.println("\tif ({}.u32 == 0) return;", ctx.ctr());
+  return true;
+}
+
+bool build_bdnzlr(BuilderContext& ctx) {
+  ctx.println("\t--{}.u64;", ctx.ctr());
+  ctx.println("\tif ({}.u32 != 0) return;", ctx.ctr());
   return true;
 }
 

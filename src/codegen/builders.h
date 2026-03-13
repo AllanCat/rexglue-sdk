@@ -127,6 +127,9 @@ bool build_extsw(BuilderContext& ctx);
 bool build_clrlwi(BuilderContext& ctx);
 
 // Rotate left double word
+bool build_rldcl(BuilderContext& ctx);
+bool build_rldcr(BuilderContext& ctx);
+bool build_rldic(BuilderContext& ctx);
 bool build_rldicl(BuilderContext& ctx);
 bool build_rldicr(BuilderContext& ctx);
 bool build_rldimi(BuilderContext& ctx);
@@ -174,6 +177,7 @@ bool build_bdzf(BuilderContext& ctx);
 bool build_bdzlr(BuilderContext& ctx);
 bool build_bdnz(BuilderContext& ctx);
 bool build_bdnzf(BuilderContext& ctx);
+bool build_bdnzlr(BuilderContext& ctx);
 bool build_bdnzt(BuilderContext& ctx);
 
 // Conditional branch (eq)
@@ -273,6 +277,7 @@ bool build_lbzux(BuilderContext& ctx);
 // Halfword loads
 bool build_lha(BuilderContext& ctx);
 bool build_lhau(BuilderContext& ctx);
+bool build_lhaux(BuilderContext& ctx);
 bool build_lhax(BuilderContext& ctx);
 bool build_lhbrx(BuilderContext& ctx);
 bool build_lhz(BuilderContext& ctx);
@@ -282,6 +287,7 @@ bool build_lhzx(BuilderContext& ctx);
 
 // Word loads
 bool build_lwa(BuilderContext& ctx);
+bool build_lwaux(BuilderContext& ctx);
 bool build_lwax(BuilderContext& ctx);
 bool build_lwbrx(BuilderContext& ctx);
 bool build_lwz(BuilderContext& ctx);
@@ -342,6 +348,7 @@ bool build_stdux(BuilderContext& ctx);
 // Floating point stores
 bool build_stfd(BuilderContext& ctx);
 bool build_stfdu(BuilderContext& ctx);
+bool build_stfdux(BuilderContext& ctx);
 bool build_stfdx(BuilderContext& ctx);
 bool build_stfiwx(BuilderContext& ctx);
 bool build_stfs(BuilderContext& ctx);
@@ -350,6 +357,9 @@ bool build_stfsux(BuilderContext& ctx);
 bool build_stfsx(BuilderContext& ctx);
 
 // Vector loads
+bool build_lvebx(BuilderContext& ctx);
+bool build_lvehx(BuilderContext& ctx);
+bool build_lvewx(BuilderContext& ctx);
 bool build_lvx(BuilderContext& ctx);
 bool build_lvlx(BuilderContext& ctx);
 bool build_lvrx(BuilderContext& ctx);
@@ -399,15 +409,19 @@ bool build_mr(BuilderContext& ctx);
 bool build_mcrf(BuilderContext& ctx);
 
 // Move from special registers
+bool build_mfctr(BuilderContext& ctx);
 bool build_mfcr(BuilderContext& ctx);
+bool build_mfxer(BuilderContext& ctx);
 bool build_mfocrf(BuilderContext& ctx);
 bool build_mflr(BuilderContext& ctx);
 bool build_mfmsr(BuilderContext& ctx);
 bool build_mffs(BuilderContext& ctx);
 bool build_mftb(BuilderContext& ctx);
+bool build_mftbu(BuilderContext& ctx);
 
 // Move to special registers
 bool build_mtcr(BuilderContext& ctx);
+bool build_mtcrf(BuilderContext& ctx);
 bool build_mtctr(BuilderContext& ctx);
 bool build_mtlr(BuilderContext& ctx);
 bool build_mtmsrd(BuilderContext& ctx);
@@ -477,6 +491,7 @@ bool build_vminub(BuilderContext& ctx);
 // Vector average
 bool build_vavgsb(BuilderContext& ctx);
 bool build_vavgsh(BuilderContext& ctx);
+bool build_vavgsw(BuilderContext& ctx);
 bool build_vavgub(BuilderContext& ctx);
 bool build_vavguh(BuilderContext& ctx);
 
@@ -500,6 +515,7 @@ bool build_vcmpgtfp(BuilderContext& ctx);
 bool build_vcmpgtub(BuilderContext& ctx);
 bool build_vcmpgtuh(BuilderContext& ctx);
 bool build_vcmpgtuw(BuilderContext& ctx);
+bool build_vcmpgtsb(BuilderContext& ctx);
 bool build_vcmpgtsh(BuilderContext& ctx);
 bool build_vcmpgtsw(BuilderContext& ctx);
 

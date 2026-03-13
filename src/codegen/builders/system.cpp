@@ -204,6 +204,17 @@ bool build_mcrf(BuilderContext& ctx) {
 // Move From Special Registers
 //=============================================================================
 
+bool build_mfxer(BuilderContext& ctx) {
+  ctx.println("\t{}.u64 = ({}.so << 31) | ({}.ov << 30) | ({}.ca << 29);",
+              ctx.r(ctx.insn.operands[0]), ctx.xer(), ctx.xer(), ctx.xer());
+  return true;
+}
+
+bool build_mfctr(BuilderContext& ctx) {
+  ctx.println("\t{}.u64 = {}.u64;", ctx.r(ctx.insn.operands[0]), ctx.ctr());
+  return true;
+}
+
 bool build_mfcr(BuilderContext& ctx) {
   for (size_t i = 0; i < 32; i++) {
     constexpr std::string_view fields[] = {"lt", "gt", "eq", "so"};
@@ -259,6 +270,12 @@ bool build_mftb(BuilderContext& ctx) {
   return true;
 }
 
+bool build_mftbu(BuilderContext& ctx) {
+  // Upper 32 bits of timebase
+  ctx.println("\t{}.u64 = PPC_QUERY_TIMEBASE() >> 32;", ctx.r(ctx.insn.operands[0]));
+  return true;
+}
+
 //=============================================================================
 // Move To Special Registers
 //=============================================================================
@@ -268,6 +285,21 @@ bool build_mtcr(BuilderContext& ctx) {
     constexpr std::string_view fields[] = {"lt", "gt", "eq", "so"};
     ctx.println("\t{}.{} = ({}.u32 & 0x{:X}) != 0;", ctx.cr(i / 4), fields[i % 4],
                 ctx.r(ctx.insn.operands[0]), 1u << (31 - i));
+  }
+  return true;
+}
+
+bool build_mtcrf(BuilderContext& ctx) {
+  uint32_t fxm = ctx.insn.operands[0];
+  constexpr std::string_view names[] = {"lt", "gt", "eq", "so"};
+  for (uint32_t field = 0; field < 8; field++) {
+    if (fxm & (0x80u >> field)) {
+      uint32_t base_bit = 28 - 4 * field;
+      for (int b = 0; b < 4; b++) {
+        ctx.println("\t{}.{} = ({}.u32 & 0x{:X}) != 0;", ctx.cr(field), names[b],
+                    ctx.r(ctx.insn.operands[1]), 1u << (base_bit + 3 - b));
+      }
+    }
   }
   return true;
 }
@@ -304,7 +336,19 @@ bool build_mtmsrd(BuilderContext& ctx) {
 }
 
 bool build_mtfsf(BuilderContext& ctx) {
-  ctx.println("\tctx.fpscr.storeFromGuest({}.u32);", ctx.f(ctx.insn.operands[1]));
+  uint32_t fm = ctx.insn.operands[0];
+  uint32_t mask = 0;
+  for (int j = 0; j < 8; j++) {
+    if (fm & (1 << (7 - j)))
+      mask |= 0xF << (4 * j);
+  }
+  if (mask == 0xFFFFFFFF) {
+    ctx.println("\tctx.fpscr.storeFromGuest({}.u32);", ctx.f(ctx.insn.operands[1]));
+  } else {
+    ctx.println(
+        "\tctx.fpscr.storeFromGuest((ctx.fpscr.loadFromHost() & 0x{:08X}) | ({}.u32 & 0x{:08X}));",
+        ~mask, ctx.f(ctx.insn.operands[1]), mask);
+  }
   return true;
 }
 

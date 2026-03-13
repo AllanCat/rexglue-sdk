@@ -12,8 +12,10 @@
 #include <rex/rex_app.h>
 
 #include <rex/cvar.h>
+#include <rex/ui/flags.h>
+#include <rex/kernel/crt/heap.h>
 #include <rex/filesystem.h>
-#include <rex/log_capture.h>
+#include <rex/logging/sink.h>
 #include <rex/logging.h>
 #include <rex/ui/overlay/console_overlay.h>
 #include <rex/ui/overlay/debug_overlay.h>
@@ -100,12 +102,7 @@ bool ReXApp::OnInitialize() {
 
   // Attach log capture sink to all loggers for the console overlay
   log_sink_ = std::make_shared<rex::LogCaptureSink>();
-  for (size_t i = 0; i < static_cast<size_t>(rex::LogCategory::Count); ++i) {
-    auto logger = rex::GetLogger(static_cast<rex::LogCategory>(i));
-    if (logger) {
-      logger->sinks().push_back(log_sink_);
-    }
-  }
+  rex::AddSink(log_sink_);
 
   REXLOG_INFO("{} starting", GetName());
   REXLOG_INFO("  Game directory: {}", game_data_root_.string());
@@ -148,6 +145,17 @@ bool ReXApp::OnInitialize() {
     return false;
   }
 
+  // Initialize rexcrt heap after LoadXexImage to avoid guest memory writes
+  // corrupting the heap region. rexcrt_heap is set by codegen (REXCRT_HEAP)
+  // when [rexcrt] contains heap functions -- originals are stripped so init
+  // is required. Size is controlled by the rexcrt_heap_size_mb CVAR.
+  if (ppc_info_.rexcrt_heap) {
+    if (!rex::kernel::crt::InitHeap(REXCVAR_GET(rexcrt_heap_size_mb))) {
+      REXLOG_ERROR("Failed to initialize rexcrt heap");
+      return false;
+    }
+  }
+
   // Notify subclass
   OnPostSetup();
 
@@ -160,6 +168,9 @@ bool ReXApp::OnInitialize() {
 
   window_->AddListener(this);
   window_->AddInputListener(this, 0);
+  if (REXCVAR_GET(fullscreen)) {
+    window_->SetFullscreen(true);
+  }
   window_->Open();
 
   // Setup graphics presenter and ImGui

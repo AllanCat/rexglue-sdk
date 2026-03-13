@@ -18,7 +18,7 @@ set(REXGLUE_INSTALL_TARGETS
     rexaudio rexgraphics rexsystem rexkernel rexcodegen
     # Vendored thirdparty libraries (required by SDK)
     disruptorplus renderdoc simde tomlplusplus  # INTERFACE (header-only)
-    aes128 mspack disasm xxhash imgui  # STATIC libraries
+    aes128 mspack o1heap disasm xxhash imgui  # STATIC libraries
     libavcodec libavutil           # FFmpeg (vendored build)
     # CLI tool
     rexglue
@@ -35,6 +35,15 @@ if(REXGLUE_USE_D3D12)
     list(APPEND REXGLUE_INSTALL_TARGETS dxc-headers)
 endif()
 
+set(REXGLUE_INSTALL_FIDELITYFX_TARGETS)
+if(TARGET amd_fidelityfx_vk)
+    list(APPEND REXGLUE_INSTALL_FIDELITYFX_TARGETS amd_fidelityfx_vk)
+endif()
+
+if(TARGET amd_fidelityfx_dx12)
+    list(APPEND REXGLUE_INSTALL_FIDELITYFX_TARGETS amd_fidelityfx_dx12)
+endif()
+
 install(TARGETS ${REXGLUE_INSTALL_TARGETS}
     EXPORT rexglueTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -42,9 +51,24 @@ install(TARGETS ${REXGLUE_INSTALL_TARGETS}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+if(REXGLUE_INSTALL_FIDELITYFX_TARGETS)
+    install(TARGETS ${REXGLUE_INSTALL_FIDELITYFX_TARGETS}
+        EXPORT rexglueTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+
 # Install public headers
 install(DIRECTORY include/rex
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# Install generated version header
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/include/rex/version.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/rex
 )
 
 # Install vendored header-only library headers
@@ -65,6 +89,10 @@ install(DIRECTORY thirdparty/simde/simde
 install(FILES
     thirdparty/xxHash/xxhash.h
     thirdparty/xxHash/xxh3.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+install(FILES
+    thirdparty/o1heap/o1heap/o1heap.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(FILES

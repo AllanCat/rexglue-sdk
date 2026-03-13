@@ -12,10 +12,15 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <rex/assert.h>
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/graphics/flags.h>
+#include <rex/graphics/video_mode_util.h>
 #include <rex/logging.h>
+#include <rex/ui/flags.h>
 #include <rex/ui/surface_win.h>
 #include <rex/ui/window_win.h>
 
@@ -31,12 +36,72 @@
 #include <shellapi.h>
 #include <tpcshrd.h>
 
+namespace {
+
+uint32_t ResolveWindowWidth(uint32_t requested_width) {
+  if (REXCVAR_GET(window_width) > 0) {
+    return uint32_t(REXCVAR_GET(window_width));
+  }
+  if (!rex::cvar::HasNonDefaultValue("window_width")) {
+    if (rex::cvar::HasNonDefaultValue("video_mode_width") && REXCVAR_GET(video_mode_width) > 0) {
+      return uint32_t(std::clamp(REXCVAR_GET(video_mode_width), 1, 8192));
+    }
+    int32_t preset_width = 0;
+    int32_t preset_height = 0;
+    if (rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(preset_width,
+                                                                       preset_height)) {
+      return uint32_t(std::clamp(preset_width, 1, 8192));
+    }
+  }
+  return requested_width;
+}
+
+uint32_t ResolveWindowHeight(uint32_t requested_height) {
+  if (REXCVAR_GET(window_height) > 0) {
+    return uint32_t(REXCVAR_GET(window_height));
+  }
+  if (!rex::cvar::HasNonDefaultValue("window_height")) {
+    if (rex::cvar::HasNonDefaultValue("video_mode_height") && REXCVAR_GET(video_mode_height) > 0) {
+      return uint32_t(std::clamp(REXCVAR_GET(video_mode_height), 1, 8192));
+    }
+    int32_t preset_width = 0;
+    int32_t preset_height = 0;
+    if (rex::graphics::video_mode_util::TryGetResolutionPresetFromCVar(preset_width,
+                                                                       preset_height)) {
+      return uint32_t(std::clamp(preset_height, 1, 8192));
+    }
+  }
+  return requested_height;
+}
+
+BOOL CALLBACK EnumMonitorsCallback(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
+  auto* monitors = reinterpret_cast<std::vector<HMONITOR>*>(data);
+  monitors->push_back(monitor);
+  return TRUE;
+}
+
+HMONITOR GetMonitorByIndex(int32_t index) {
+  if (index <= 0) {
+    return nullptr;
+  }
+  std::vector<HMONITOR> monitors;
+  EnumDisplayMonitors(nullptr, nullptr, EnumMonitorsCallback, reinterpret_cast<LPARAM>(&monitors));
+  if (index <= static_cast<int32_t>(monitors.size())) {
+    return monitors[index - 1];
+  }
+  return nullptr;
+}
+
+}  // namespace
+
 namespace rex {
 namespace ui {
 
 std::unique_ptr<Window> Window::Create(WindowedAppContext& app_context,
                                        const std::string_view title, uint32_t desired_logical_width,
                                        uint32_t desired_logical_height) {
+  desired_logical_width = ResolveWindowWidth(desired_logical_width);
+  desired_logical_height = ResolveWindowHeight(desired_logical_height);
   return std::make_unique<Win32Window>(app_context, title, desired_logical_width,
                                        desired_logical_height);
 }
@@ -215,6 +280,25 @@ bool Win32Window::OpenImpl() {
   if (icon_) {
     SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon_));
     SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon_));
+  }
+
+  // Move the window to the requested monitor before entering fullscreen so
+  // that MonitorFromWindow picks the correct display.
+  if (int32_t monitor_index = REXCVAR_GET(monitor); monitor_index > 0) {
+    HMONITOR target = GetMonitorByIndex(monitor_index);
+    if (target) {
+      MONITORINFO mi;
+      mi.cbSize = sizeof(mi);
+      if (GetMonitorInfo(target, &mi)) {
+        RECT wr;
+        GetWindowRect(hwnd_, &wr);
+        int w = wr.right - wr.left;
+        int h = wr.bottom - wr.top;
+        int x = mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - w) / 2;
+        int y = mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - h) / 2;
+        SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+      }
+    }
   }
 
   if (IsFullscreen()) {
