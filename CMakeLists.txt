@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(ReXGlue
-    VERSION 0.3.2
+    VERSION 0.4.0
     LANGUAGES C CXX
     DESCRIPTION "Xbox 360 Recompilation SDK"
 )
@@ -49,6 +49,17 @@ set(REXGLUE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 # SDK install support
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+if(UNIX AND NOT APPLE)
+    # Keep installed binaries self-contained by resolving shared libs relative
+    # to the install prefix (for example, bin -> ../lib).
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+    list(APPEND CMAKE_INSTALL_RPATH
+        "$ORIGIN"
+        "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+    )
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+endif()
 
 # Enforce Clang18 compiler
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -160,6 +171,7 @@ message(STATUS "===========================================")
 
 # SDK install/export rules (skipped when consumed as a subdirectory)
 if(PROJECT_IS_TOP_LEVEL)
+    include(cmake/rexglue_devenv.cmake)
     include(cmake/rexglue_install.cmake)
 else()
     # When consumed via add_subdirectory(), provide the same interface as find_package().

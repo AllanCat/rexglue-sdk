@@ -19,6 +19,7 @@
 
 #include <rex/kernel.h>
 #include <rex/memory.h>
+#include <rex/thread.h>
 
 // XMA audio format:
 // From research, XMA appears to be based on WMA Pro with
@@ -159,11 +160,24 @@ class XmaContext {
 
   uint32_t id() { return id_; }
   uint32_t guest_ptr() { return guest_ptr_; }
-  bool is_allocated() { return is_allocated_; }
-  bool is_enabled() { return is_enabled_; }
+  bool is_allocated() { return is_allocated_.load(std::memory_order_acquire); }
+  bool is_enabled() { return is_enabled_.load(std::memory_order_acquire); }
 
-  void set_is_allocated(bool is_allocated) { is_allocated_ = is_allocated; }
-  void set_is_enabled(bool is_enabled) { is_enabled_ = is_enabled; }
+  void set_is_allocated(bool is_allocated) {
+    is_allocated_.store(is_allocated, std::memory_order_release);
+  }
+  void set_is_enabled(bool is_enabled) { is_enabled_.store(is_enabled, std::memory_order_release); }
+
+  void SignalWorkDone() {
+    if (work_completion_event_) {
+      work_completion_event_->Set();
+    }
+  }
+  void WaitForWorkDone() {
+    if (work_completion_event_) {
+      rex::thread::Wait(work_completion_event_.get(), false);
+    }
+  }
 
  private:
   static void SwapInputBuffer(XMA_CONTEXT_DATA* data);
@@ -188,12 +202,13 @@ class XmaContext {
   int PrepareDecoder(uint8_t* packet, int sample_rate, bool is_two_channel);
 
   memory::Memory* memory_ = nullptr;
+  std::unique_ptr<rex::thread::Event> work_completion_event_;
 
   uint32_t id_ = 0;
   uint32_t guest_ptr_ = 0;
   std::mutex lock_;
-  bool is_allocated_ = false;
-  bool is_enabled_ = false;
+  std::atomic<bool> is_allocated_ = false;
+  std::atomic<bool> is_enabled_ = false;
   // bool is_dirty_ = true;
 
   // ffmpeg structures

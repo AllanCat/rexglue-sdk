@@ -39,7 +39,8 @@ namespace rex::audio {
 
 using stream::BitStream;
 
-XmaContext::XmaContext() = default;
+XmaContext::XmaContext()
+    : work_completion_event_(rex::thread::Event::CreateAutoResetEvent(false)) {}
 
 XmaContext::~XmaContext() {
   if (av_context_) {
@@ -162,7 +163,7 @@ void XmaContext::Disable() {
 void XmaContext::Release() {
   // Lock it in case the decoder thread is working on it now.
   std::lock_guard<std::mutex> lock(lock_);
-  assert_true(is_allocated_ == true);
+  assert_true(is_allocated());
 
   set_is_allocated(false);
   auto context_ptr = memory()->TranslateVirtual(guest_ptr());

@@ -19,6 +19,7 @@
 #include <rex/ppc/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>
+#include <rex/system/xevent.h>
 #include <rex/system/xobject.h>
 #include <rex/system/xsemaphore.h>
 #include <rex/system/xthread.h>
@@ -84,27 +85,56 @@ ppc_u32_result_t ObReferenceObjectByHandle_entry(ppc_u32_t handle, ppc_u32_t obj
                                                  ppc_pu32_t out_object_ptr) {
   REXKRNL_IMPORT_TRACE("ObReferenceObjectByHandle", "handle={:#x} type={:#x}", (uint32_t)handle,
                        (uint32_t)object_type_ptr);
-  // These values come from how Xenia handles uninitialized kernel data exports.
-  // D###BEEF where ### is the ordinal.
-  const static std::unordered_map<XObject::Type, uint32_t> object_types = {
-      {XObject::Type::Event, 0xD00EBEEF},
-      {XObject::Type::Semaphore, 0xD017BEEF},
-      {XObject::Type::Thread, 0xD01BBEEF}};
-  auto object = kernel_state()->object_table()->LookupObject<XObject>(handle);
+
+  object_ref<XObject> object;
+
+  // Handle pseudo-handles.
+  uint32_t handle_val = static_cast<uint32_t>(handle);
+  if (handle_val == 0xFFFFFFFE) {
+    // CurrentThread pseudo-handle.
+    auto thread = XThread::GetCurrentThread();
+    if (!thread) {
+      return X_STATUS_INVALID_HANDLE;
+    }
+    object = retain_object(static_cast<XObject*>(thread));
+  } else {
+    object = kernel_state()->object_table()->LookupObject<XObject>(handle);
+  }
+
   if (!object) {
     return X_STATUS_INVALID_HANDLE;
   }
 
   uint32_t native_ptr = object->guest_object();
-  auto object_type = object_types.find(object->type());
-  if (object_type != object_types.end()) {
-    if (object_type_ptr && object_type_ptr != object_type->second) {
+
+  // Type check using real KernelGuestGlobals addresses.
+  if (object_type_ptr) {
+    uint32_t globals_base = kernel_state()->GetKernelGuestGlobals();
+    uint32_t expected_type = 0;
+    switch (object->type()) {
+      case XObject::Type::Thread:
+        expected_type = globals_base + offsetof(KernelGuestGlobals, ExThreadObjectType);
+        break;
+      case XObject::Type::Event:
+        expected_type = globals_base + offsetof(KernelGuestGlobals, ExEventObjectType);
+        break;
+      case XObject::Type::Mutant:
+        expected_type = globals_base + offsetof(KernelGuestGlobals, ExMutantObjectType);
+        break;
+      case XObject::Type::Semaphore:
+        expected_type = globals_base + offsetof(KernelGuestGlobals, ExSemaphoreObjectType);
+        break;
+      case XObject::Type::Timer:
+        expected_type = globals_base + offsetof(KernelGuestGlobals, ExTimerObjectType);
+        break;
+      default:
+        break;
+    }
+    if (expected_type && object_type_ptr != expected_type) {
       return X_STATUS_OBJECT_TYPE_MISMATCH;
     }
-  } else {
-    assert_unhandled_case(object->type());
-    native_ptr = 0xDEADF00D;
   }
+
   // Caller takes the reference.
   // It's released in ObDereferenceObject.
   object->RetainHandle();
@@ -145,10 +175,10 @@ ppc_u32_result_t ObDereferenceObject_entry(ppc_u32_t native_ptr) {
 
 ppc_u32_result_t ObCreateSymbolicLink_entry(ppc_ptr_t<X_ANSI_STRING> path_ptr,
                                             ppc_ptr_t<X_ANSI_STRING> target_ptr) {
-  auto path = rex::string::utf8_canonicalize_guest_path(
-      util::TranslateAnsiString(kernel_memory(), path_ptr));
+  auto path =
+      rex::string::utf8_canonicalize_guest_path(util::TranslateAnsiPath(kernel_memory(), path_ptr));
   auto target = rex::string::utf8_canonicalize_guest_path(
-      util::TranslateAnsiString(kernel_memory(), target_ptr));
+      util::TranslateAnsiPath(kernel_memory(), target_ptr));
 
   if (rex::string::utf8_starts_with(path, u8"\\??\\")) {
     path = path.substr(4);  // Strip the full qualifier
@@ -162,7 +192,7 @@ ppc_u32_result_t ObCreateSymbolicLink_entry(ppc_ptr_t<X_ANSI_STRING> path_ptr,
 }
 
 ppc_u32_result_t ObDeleteSymbolicLink_entry(ppc_ptr_t<X_ANSI_STRING> path_ptr) {
-  auto path = util::TranslateAnsiString(kernel_memory(), path_ptr);
+  auto path = util::TranslateAnsiPath(kernel_memory(), path_ptr);
   if (!kernel_state()->file_system()->UnregisterSymbolicLink(path)) {
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -200,6 +230,22 @@ ppc_u32_result_t NtClose_entry(ppc_u32_t handle) {
   return result;
 }
 
+ppc_u32_result_t NtQueryEvent_entry(ppc_u32_t handle, ppc_pu32_t out_struc) {
+  X_STATUS result = X_STATUS_SUCCESS;
+
+  auto ev = kernel_state()->object_table()->LookupObject<XEvent>(handle);
+  if (ev) {
+    uint32_t type_tmp, state_tmp;
+    ev->Query(&type_tmp, &state_tmp);
+    out_struc[0] = type_tmp;
+    out_struc[1] = state_tmp;
+  } else {
+    result = X_STATUS_INVALID_HANDLE;
+  }
+
+  return result;
+}
+
 }  // namespace rex::kernel::xboxkrnl
 
 XBOXKRNL_EXPORT(__imp__ObOpenObjectByName, rex::kernel::xboxkrnl::ObOpenObjectByName_entry)
@@ -215,6 +261,7 @@ XBOXKRNL_EXPORT(__imp__ObCreateSymbolicLink, rex::kernel::xboxkrnl::ObCreateSymb
 XBOXKRNL_EXPORT(__imp__ObDeleteSymbolicLink, rex::kernel::xboxkrnl::ObDeleteSymbolicLink_entry)
 XBOXKRNL_EXPORT(__imp__NtDuplicateObject, rex::kernel::xboxkrnl::NtDuplicateObject_entry)
 XBOXKRNL_EXPORT(__imp__NtClose, rex::kernel::xboxkrnl::NtClose_entry)
+XBOXKRNL_EXPORT(__imp__NtQueryEvent, rex::kernel::xboxkrnl::NtQueryEvent_entry)
 
 XBOXKRNL_EXPORT_STUB(__imp__ObCreateObject);
 XBOXKRNL_EXPORT_STUB(__imp__ObGetWaitableObject);
@@ -229,7 +276,6 @@ XBOXKRNL_EXPORT_STUB(__imp__NtCreateSymbolicLinkObject);
 XBOXKRNL_EXPORT_STUB(__imp__NtMakeTemporaryObject);
 XBOXKRNL_EXPORT_STUB(__imp__NtOpenDirectoryObject);
 XBOXKRNL_EXPORT_STUB(__imp__NtQueryDirectoryObject);
-XBOXKRNL_EXPORT_STUB(__imp__NtQueryEvent);
 XBOXKRNL_EXPORT_STUB(__imp__NtQueryIoCompletion);
 XBOXKRNL_EXPORT_STUB(__imp__NtQueryMutant);
 XBOXKRNL_EXPORT_STUB(__imp__NtQuerySemaphore);
